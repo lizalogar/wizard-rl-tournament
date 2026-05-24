@@ -11,7 +11,7 @@ Common code in common/ is SHARED — do not modify it.
 import sys
 import io
 from agents.agent_qtable import QTableAgent
-from agents.agent_dqn    import DQNAgent, DQNAgentSplit, DQNAgentShared
+from agents.agent_dqn    import DQNAgent
 from agents.agent_ppo    import PPOAgent
 from agents.random_agent import RandomAgent
 from common.game         import WizardGame
@@ -32,11 +32,11 @@ from common.tournament   import (train_agents, evaluate_vs_random,
 #         'gamma':         [0.8, 0.9],
 #         'epsilon_decay': [0.995, 0.997, 0.999],
 #     },
-#     train_episodes=3000,
-#     eval_episodes=200,
+#     train_episodes=500,
+#     eval_episodes=100,
 # )
 # qt_best = qt_results[0][0]
-
+#
 # print("\n>>> DQNAgent grid search")
 # dqn_results = grid_search(
 #     DQNAgent,
@@ -65,14 +65,8 @@ run_tournament(
         ("QTable vs QTable vs QTable",
          [QTableAgent(f'QT_{i}') for i in range(3)]),
 
-        ("DQN baseline vs itself",
+        ("DQN vs DQN vs DQN",
          [DQNAgent(f'DQN_{i}') for i in range(3)]),
-
-        ("DQN split-input vs itself",
-         [DQNAgentSplit(f'DQNs_{i}') for i in range(3)]),
-
-        ("DQN shared-backbone vs itself",
-         [DQNAgentShared(f'DQNh_{i}') for i in range(3)]),
 
         ("PPO vs PPO vs PPO",
          [PPOAgent(f'PPO_{i}') for i in range(3)]),
@@ -91,6 +85,6 @@ run_tournament(
         ("PPO vs 2 random",
          [PPOAgent('PPO'), RandomAgent('R1'), RandomAgent('R2')]),
     ],
-    train_episodes=1000,    #gal note: daj na 5000, ker si poveco q-table dim.
+    train_episodes=1000,
     eval_episodes=200,
 )

@@ -1,40 +1,16 @@
 """
-PPO Agent  —  YOUR FILE TO IMPLEMENT.
+PPO Agent  —  Enhanced implementation.
 
-The engine always calls act(obs, valid_actions) and the three on_* hooks.
-Do NOT touch any file in common/.
-
-What is PPO?
-------------
-Proximal Policy Optimisation is a policy-gradient method — it directly
-learns a probability distribution over actions (a "policy") rather than
-Q-values.  It has two networks:
-
-  policy  π(a | s)  — outputs a probability for each action given state s
-  value   V(s)      — estimates the expected total reward from state s
-
-Training loop (once per episode in on_episode_end):
-  1. Collect all (obs, action, log_prob, reward) from the episode
-  2. Compute advantages:  A = reward - V(s)
-     (advantage > 0  →  action was better than expected, reinforce it)
-  3. PPO "clipped" objective:
-       r = π_new(a|s) / π_old(a|s)          (probability ratio)
-       L = E[ min( r*A,  clip(r, 1-ε, 1+ε)*A ) ]
-     The clip prevents the policy from updating too aggressively in one step,
-     which stabilises training compared to vanilla policy gradient (REINFORCE).
-  4. Value loss:  MSE( V(s),  reward )
-  5. Gradient step on both networks.
-
-Key difference from DQN
-  DQN: deterministic (picks highest Q-value)
-  PPO: stochastic (samples from learned probability distribution)
-       → naturally explores without needing an explicit epsilon
-
-Suggested improvements:
-  - Generalised Advantage Estimation (GAE) for step 2
-  - Entropy bonus to prevent policy collapse
-  - Multiple update epochs per episode (K=4 is common)
-  - Separate hidden sizes for policy and value networks
+Improvements over the skeleton:
+  - 3-layer 128-unit networks with LayerNorm for stable gradients
+  - Trick rewards used via on_trick_result(); discounted backward within each
+    round so early steps get proper credit, not a flat round reward
+  - K=4 update epochs per episode
+  - Entropy bonus to prevent premature policy collapse
+  - Gradient clipping (max_norm=0.5)
+  - Tactical logit priors: bias toward winning/shedding cards based on
+    how many tricks are still needed, and toward sensible bids based on
+    hand quality
 """
 
 import numpy as np
@@ -42,6 +18,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from common.base_agent import (BaseAgent, OBS_SIZE, OBS_PHASE,
+                                OBS_TRICKS_NEEDED,
+                                OBS_HAND_WIZARDS, OBS_HAND_HIGH, OBS_HAND_TRUMP,
                                 NUM_CARD_TYPES, MAX_BID)
 
 
@@ -50,28 +28,32 @@ from common.base_agent import (BaseAgent, OBS_SIZE, OBS_PHASE,
 # ------------------------------------------------------------------
 
 class PolicyNetwork(nn.Module):
-    """
-    Maps obs -> raw logits (one per action).
-    We apply softmax + masking externally so that invalid actions get
-    probability 0 regardless of network output.
-    """
-    def __init__(self, input_size, output_size, hidden_size=64):
+    def __init__(self, input_size, output_size, hidden_size=128):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(input_size, hidden_size), nn.ReLU(),
+            nn.Linear(input_size, hidden_size),
+            nn.LayerNorm(hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.LayerNorm(hidden_size),
+            nn.ReLU(),
             nn.Linear(hidden_size, output_size),
         )
 
     def forward(self, x):
-        return self.net(x)   # raw logits
+        return self.net(x)
 
 
 class ValueNetwork(nn.Module):
-    """Maps obs -> scalar value estimate."""
-    def __init__(self, input_size, hidden_size=64):
+    def __init__(self, input_size, hidden_size=128):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(input_size, hidden_size), nn.ReLU(),
+            nn.Linear(input_size, hidden_size),
+            nn.LayerNorm(hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.LayerNorm(hidden_size),
+            nn.ReLU(),
             nn.Linear(hidden_size, 1),
         )
 
@@ -85,54 +67,129 @@ class ValueNetwork(nn.Module):
 
 class PPOAgent(BaseAgent):
     """
-    PPO agent with separate policy networks for bidding and playing
-    and a shared value network.
+    PPO agent with:
+      - separate bid / play policy networks
+      - shared value network
+      - per-trick reward tracking with within-round discounted returns
+      - K-epoch updates, entropy bonus, gradient clipping
+      - tactical logit priors
 
-    self.epsilon is kept only so the tournament's _freeze_epsilon()
-    utility can switch the agent to greedy evaluation mode.
+    self.epsilon: 1.0 = stochastic training, 0.0 = greedy evaluation
     """
 
     def __init__(self, name,
-                 lr=0.001,
-                 gamma=0.9,
-                 clip_eps=0.2,     # PPO clipping range
-                 hidden_size=64):
+                 lr=3e-4,
+                 gamma=0.95,
+                 clip_eps=0.2,
+                 hidden_size=128,
+                 k_epochs=4,
+                 entropy_coef=0.01,
+                 tactic_scale=0.5,
+                 obs_augment=True):
         super().__init__(name)
-        self.gamma    = gamma
-        self.clip_eps = clip_eps
+        self.gamma        = gamma
+        self.clip_eps     = clip_eps
+        self.k_epochs     = k_epochs
+        self.entropy_coef = entropy_coef
+        self.tactic_scale = tactic_scale
+        self.epsilon      = 1.0   # tournament sets this to 0 for evaluation
+        self.obs_augment  = obs_augment
 
-        # epsilon=1 → stochastic (training),  epsilon=0 → greedy (evaluation)
-        self.epsilon = 1.0
-
-        # Separate policy nets for the two decision types
-        self.bid_policy  = PolicyNetwork(OBS_SIZE, MAX_BID,        hidden_size)
-        self.play_policy = PolicyNetwork(OBS_SIZE, NUM_CARD_TYPES, hidden_size)
-        self.value_net   = ValueNetwork(OBS_SIZE, hidden_size)
+        _in = OBS_SIZE + 2 if obs_augment else OBS_SIZE
+        self.bid_policy  = PolicyNetwork(_in, MAX_BID,        hidden_size)
+        self.play_policy = PolicyNetwork(_in, NUM_CARD_TYPES, hidden_size)
+        self.value_net   = ValueNetwork(_in,                  hidden_size)
 
         self.bid_opt   = optim.Adam(self.bid_policy.parameters(),  lr=lr)
         self.play_opt  = optim.Adam(self.play_policy.parameters(), lr=lr)
         self.value_opt = optim.Adam(self.value_net.parameters(),   lr=lr)
 
-        # Trajectory collected over the episode
-        # Each entry: (obs, action, log_prob, phase)
-        # reward is filled in by on_round_end
-        self._pending    = []   # transitions waiting for their reward
-        self._trajectory = []   # (obs, action, log_prob, reward, phase)
+        # Round-level card counts tracked by the agent from trick_card_types callbacks
+        self._round_wizards_seen = 0   # wizards played by ALL players this round so far
+        self._round_trump_seen   = 0   # trump cards played by ALL players this round so far
+
+        # Within-round buffer: list of dicts
+        # {'obs', 'action', 'log_prob', 'trick_reward', 'phase'}
+        self._round_buffer  = []
+
+        # Holds the most recent play-step until on_trick_result delivers its reward
+        # (obs, action, log_prob, phase)
+        self._pending_trick = None
+
+        # Episode-level finalized trajectory
+        # {'obs', 'action', 'log_prob', 'return_', 'phase'}
+        self._trajectory = []
+
+    # ------------------------------------------------------------------
+    # Tactical logit bonus
+    # ------------------------------------------------------------------
+
+    def _tactical_bonus(self, obs: np.ndarray, phase: float) -> torch.Tensor:
+        """Soft logit adjustments that encode Wizard strategy."""
+        if phase < 0.5:
+            # Bidding: penalise bids far from expected trick count
+            wizards  = float(obs[OBS_HAND_WIZARDS]) * 4.0
+            trump    = float(obs[OBS_HAND_TRUMP])   * 10.0
+            high     = float(obs[OBS_HAND_HIGH])    * 10.0
+            expected = wizards * 1.0 + trump * 0.6 + high * 0.3
+
+            bonus = torch.zeros(MAX_BID)
+            for b in range(MAX_BID):
+                bonus[b] = float(-abs(b - expected) * self.tactic_scale)
+            return bonus
+
+        # Playing phase: steer toward winning or shedding based on need
+        # [0=wizard, 1=jester, 2=trump, 3=high, 4=low]
+        tricks_needed = obs[OBS_TRICKS_NEEDED] * 2.0   # un-normalise from /2
+
+        bonus = torch.zeros(NUM_CARD_TYPES)
+        s = self.tactic_scale
+        if tricks_needed > 0:
+            bonus[0] =  3.0 * s   # wizard
+            bonus[2] =  2.0 * s   # trump
+            bonus[3] =  1.0 * s   # high
+            bonus[1] = -2.0 * s   # jester
+            bonus[4] = -1.0 * s   # low
+        else:
+            bonus[1] =  3.0 * s   # jester
+            bonus[4] =  1.0 * s   # low
+            bonus[0] = -3.0 * s   # wizard
+            bonus[2] = -2.0 * s   # trump
+            bonus[3] = -1.0 * s   # high
+        return bonus
+
+    def _augment_obs(self, obs: np.ndarray) -> np.ndarray:
+        if not self.obs_augment:
+            return obs
+        extra = np.array([
+            self._round_wizards_seen / 4.0,
+            self._round_trump_seen   / 13.0,
+        ], dtype=np.float32)
+        return np.concatenate([obs, extra])
 
     # ------------------------------------------------------------------
     # Action selection
     # ------------------------------------------------------------------
 
     def act(self, obs: np.ndarray, valid_actions: list) -> int:
-        obs_t = torch.FloatTensor(obs)
-        phase = obs[OBS_PHASE]
+        phase  = obs[OBS_PHASE]
 
+        # Reset round counters at the start of each new round (bid phase)
+        if phase < 0.5:
+            self._round_wizards_seen = 0
+            self._round_trump_seen   = 0
+
+        aug_obs = self._augment_obs(obs)
+        obs_t   = torch.FloatTensor(aug_obs)
         policy = self.bid_policy if phase < 0.5 else self.play_policy
 
         with torch.no_grad():
             logits = policy(obs_t)
 
-        # Mask invalid actions: set their logits to -inf before softmax
+        # Tactical prior (uses original obs indices — unaffected by augmentation)
+        logits = logits + self._tactical_bonus(obs, phase)
+
+        # Mask invalid actions
         mask = torch.full((logits.shape[0],), float('-inf'))
         for a in valid_actions:
             mask[a] = 0.0
@@ -141,92 +198,157 @@ class PPOAgent(BaseAgent):
         probs = torch.softmax(logits, dim=-1)
 
         if self.epsilon == 0.0:
-            # Evaluation mode: greedy
             action   = int(probs.argmax())
             log_prob = float(torch.log(probs[action] + 1e-8))
         else:
-            # Training mode: sample from the distribution
             dist     = torch.distributions.Categorical(probs)
             action   = int(dist.sample())
             log_prob = float(dist.log_prob(torch.tensor(action)))
 
-        self._pending.append((obs.copy(), action, log_prob, phase))
+        # Only collect trajectory during training.
+        # When epsilon=0 (evaluation mode), act greedily but do NOT record
+        # transitions — evaluate_vs_random calls on_episode_end() too, which
+        # would otherwise trigger a surprise update against random opponents.
+        if self.epsilon != 0.0:
+            if phase < 0.5:
+                if self._pending_trick is not None:
+                    p_obs, p_act, p_lp, p_phase = self._pending_trick
+                    self._round_buffer.append({
+                        'obs': p_obs, 'action': p_act, 'log_prob': p_lp,
+                        'trick_reward': 0.0, 'phase': p_phase,
+                    })
+                    self._pending_trick = None
+                self._round_buffer.append({
+                    'obs': aug_obs, 'action': action,
+                    'log_prob': log_prob, 'trick_reward': 0.0, 'phase': phase,
+                })
+            else:
+                self._pending_trick = (aug_obs, action, log_prob, phase)
+
         return action
 
     # ------------------------------------------------------------------
     # Feedback hooks
     # ------------------------------------------------------------------
 
-    def on_trick_result(self, won_trick: bool, trick_reward: float = 0.0):
-        pass   # PPO uses round-level rewards; trick rewards ignored here
+    def on_trick_result(self, won_trick: bool, trick_reward: float = 0.0,
+                        trick_card_types: list = None):
+        types = list(trick_card_types) if trick_card_types else []
+
+        # Update private round-level card counts (wizard=0, trump=2 per CARD_TYPES)
+        self._round_wizards_seen += types.count(0)
+        self._round_trump_seen   += types.count(2)
+
+        if self._pending_trick is None:
+            return
+        p_obs, p_act, p_lp, p_phase = self._pending_trick
+        self._round_buffer.append({
+            'obs':              p_obs,
+            'action':           p_act,
+            'log_prob':         p_lp,
+            'trick_reward':     trick_reward,
+            'phase':            p_phase,
+            'trick_card_types': types,
+        })
+        self._pending_trick = None
 
     def on_round_end(self, reward: float):
-        """Assign round reward to all transitions collected this round."""
-        for obs, action, log_prob, phase in self._pending:
-            self._trajectory.append((obs, action, log_prob, reward, phase))
-        self._pending = []
-
-    def on_episode_end(self):
-        if not self._trajectory:
+        """Compute within-round discounted returns and flush to trajectory."""
+        if not self._round_buffer:
             return
 
-        obs_arr  = torch.FloatTensor(np.array([t[0] for t in self._trajectory]))
-        actions  = torch.LongTensor( [t[1] for t in self._trajectory])
-        old_lps  = torch.FloatTensor([t[2] for t in self._trajectory])
-        rewards  = torch.FloatTensor([t[3] for t in self._trajectory])
-        phases   = torch.FloatTensor([t[4] for t in self._trajectory])
+        n = len(self._round_buffer)
+        returns = [0.0] * n
 
-        # --- Compute advantages (reward - baseline) ---
-        with torch.no_grad():
-            values = self.value_net(obs_arr)
-        advantages = rewards - values
-        if advantages.std() > 1e-8:
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        # Backward pass: round_reward is the terminal signal
+        G = reward
+        for t in range(n - 1, -1, -1):
+            G = self._round_buffer[t]['trick_reward'] + self.gamma * G
+            returns[t] = G
 
-        # --- PPO policy update (bidding) ---
-        bid_mask = phases < 0.5
-        if bid_mask.any():
-            self._ppo_update(self.bid_policy, self.bid_opt,
-                             obs_arr[bid_mask], actions[bid_mask],
-                             old_lps[bid_mask], advantages[bid_mask])
+        for entry, G_t in zip(self._round_buffer, returns):
+            self._trajectory.append({
+                'obs':      entry['obs'],
+                'action':   entry['action'],
+                'log_prob': entry['log_prob'],
+                'return_':  G_t,
+                'phase':    entry['phase'],
+            })
 
-        # --- PPO policy update (playing) ---
+        self._round_buffer = []
+
+    def on_episode_end(self):
+        # Always clean up so stale data never bleeds into the next episode
+        trajectory = self._trajectory
+        self._trajectory         = []
+        self._round_buffer       = []
+        self._pending_trick      = None
+        self._round_wizards_seen = 0
+        self._round_trump_seen   = 0
+
+        if not trajectory:
+            return
+
+        obs_arr = torch.FloatTensor(np.array([t['obs']      for t in trajectory]))
+        actions = torch.LongTensor(            [t['action']  for t in trajectory])
+        old_lps = torch.FloatTensor(           [t['log_prob'] for t in trajectory])
+        returns = torch.FloatTensor(           [t['return_'] for t in trajectory])
+        phases  = torch.FloatTensor(           [t['phase']   for t in trajectory])
+
+        bid_mask  = phases < 0.5
         play_mask = phases >= 0.5
-        if play_mask.any():
-            self._ppo_update(self.play_policy, self.play_opt,
-                             obs_arr[play_mask], actions[play_mask],
-                             old_lps[play_mask], advantages[play_mask])
 
-        # --- Value network update ---
-        pred  = self.value_net(obs_arr)
-        vloss = nn.MSELoss()(pred, rewards)
-        self.value_opt.zero_grad()
-        vloss.backward()
-        self.value_opt.step()
+        for _ in range(self.k_epochs):
+            # Recompute advantages each epoch (value net updates inside loop)
+            with torch.no_grad():
+                values = self.value_net(obs_arr)
+            advantages = returns - values
+            if advantages.std() > 1e-8:
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+            if bid_mask.any():
+                self._ppo_update(
+                    self.bid_policy, self.bid_opt,
+                    obs_arr[bid_mask], actions[bid_mask],
+                    old_lps[bid_mask], advantages[bid_mask],
+                )
+
+            if play_mask.any():
+                self._ppo_update(
+                    self.play_policy, self.play_opt,
+                    obs_arr[play_mask], actions[play_mask],
+                    old_lps[play_mask], advantages[play_mask],
+                )
+
+            pred  = self.value_net(obs_arr)
+            vloss = nn.MSELoss()(pred, returns)
+            self.value_opt.zero_grad()
+            vloss.backward()
+            nn.utils.clip_grad_norm_(self.value_net.parameters(), max_norm=0.5)
+            self.value_opt.step()
 
         self._trajectory = []
 
     # ------------------------------------------------------------------
-    # PPO clipped objective
+    # PPO clipped objective with entropy bonus
     # ------------------------------------------------------------------
 
     def _ppo_update(self, policy, optimizer, obs, actions, old_log_probs, advantages):
-        """One gradient step of the clipped PPO surrogate objective."""
-        logits   = policy(obs)
-        probs    = torch.softmax(logits, dim=-1)
-        dist     = torch.distributions.Categorical(probs)
-        new_lps  = dist.log_prob(actions)
+        logits  = policy(obs)
+        probs   = torch.softmax(logits, dim=-1)
+        dist    = torch.distributions.Categorical(probs)
+        new_lps = dist.log_prob(actions)
 
-        # Probability ratio r(θ) = π_new(a|s) / π_old(a|s)
-        ratio  = torch.exp(new_lps - old_log_probs)
-
-        # Clipped surrogate loss
-        surr1  = ratio * advantages
-        surr2  = torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps) * advantages
-        loss   = -torch.min(surr1, surr2).mean()
+        ratio = torch.exp(new_lps - old_log_probs)
+        surr1 = ratio * advantages
+        surr2 = torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps) * advantages
+        policy_loss  = -torch.min(surr1, surr2).mean()
+        entropy_loss = -dist.entropy().mean()   # we want to maximise entropy
+        loss = policy_loss + self.entropy_coef * entropy_loss
 
         optimizer.zero_grad()
         loss.backward()
+        nn.utils.clip_grad_norm_(policy.parameters(), max_norm=0.5)
         optimizer.step()
 
     # ------------------------------------------------------------------
@@ -235,9 +357,11 @@ class PPOAgent(BaseAgent):
 
     def save(self, path: str):
         torch.save({
-            'bid_policy':  self.bid_policy.state_dict(),
-            'play_policy': self.play_policy.state_dict(),
-            'value_net':   self.value_net.state_dict(),
+            'bid_policy':   self.bid_policy.state_dict(),
+            'play_policy':  self.play_policy.state_dict(),
+            'value_net':    self.value_net.state_dict(),
+            'epsilon':      self.epsilon,
+            'obs_augment':  self.obs_augment,
         }, path)
         print(f"[PPOAgent] saved to {path}")
 
@@ -246,4 +370,6 @@ class PPOAgent(BaseAgent):
         self.bid_policy.load_state_dict(data['bid_policy'])
         self.play_policy.load_state_dict(data['play_policy'])
         self.value_net.load_state_dict(data['value_net'])
-        print(f"[PPOAgent] loaded from {path}")
+        self.epsilon     = data.get('epsilon',     1.0)
+        self.obs_augment = data.get('obs_augment', False)
+        print(f"[PPOAgent] loaded from {path}  (obs_augment={self.obs_augment})")

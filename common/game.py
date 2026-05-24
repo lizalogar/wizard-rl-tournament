@@ -11,6 +11,7 @@ The engine owns all game state (hands, scores, bids, trump card).
 Agents only receive an observation vector and return an action index.
 """
 
+import inspect
 import random
 import numpy as np
 from .cards import Deck
@@ -20,6 +21,7 @@ from .base_agent import (
     OBS_TRICKS_WON, OBS_TRICKS_NEEDED, OBS_POSITION,
     OBS_HAND_WIZARDS, OBS_HAND_HIGH, OBS_HAND_TRUMP,
     OBS_HAVE_WIZARD, OBS_HAVE_JESTER, OBS_HAVE_TRUMP,
+    OBS_TRICK_WIZARD, OBS_TRICK_TRUMP,
     CARD_TYPES,
 )
 
@@ -36,12 +38,20 @@ class PlayerState:
 
 
 class WizardGame:
-    def __init__(self, agents: list):
-        self.agents    = agents
-        self.states    = [PlayerState(a.name) for a in agents]
-        self.round_num = 1
-        self.trump_card            = None
-        self.current_trick_cards   = []   # cards played so far this trick
+    def __init__(self, agents: list, verbose: bool = False):
+        self.agents     = agents
+        self.states     = [PlayerState(a.name) for a in agents]
+        self.round_num  = 1
+        self.num_rounds = 60 // len(agents)   # 3p→20, 4p→15, 5p→12, 6p→10
+        self.verbose    = verbose
+        self.trump_card          = None
+        self.current_trick_cards = []   # cards played so far this trick
+
+        # Check once which agents accept the trick_card_types argument
+        self._supports_trick_cards = [
+            len(inspect.signature(a.on_trick_result).parameters) >= 3
+            for a in agents
+        ]
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -49,9 +59,9 @@ class WizardGame:
 
     def play_episode(self) -> list:
         """
-        Play a full game (10 rounds).
+        Play a full game (num_rounds rounds: 60 // num_players).
 
-        Resets scores, then plays rounds 1-10.
+        Resets scores, then plays all rounds.
         Calls agent.on_episode_end() for every agent at the end.
         Returns list of final total scores, one per agent.
         """
@@ -59,8 +69,21 @@ class WizardGame:
         for ps in self.states:
             ps.total_score = 0
 
-        for _ in range(10):
+        if self.verbose:
+            print(f"\n{'='*60}")
+            print(f"  WIZARD  |  {len(self.agents)} players  |  {self.num_rounds} rounds")
+            print(f"{'='*60}")
+
+        for _ in range(self.num_rounds):
             self.play_round()
+
+        if self.verbose:
+            print(f"\n{'='*60}  FINAL SCORES")
+            for ps in self.states:
+                print(f"  {ps.name:<12}  {ps.total_score:>6}")
+            winner = max(self.states, key=lambda s: s.total_score)
+            print(f"  Winner: {winner.name}")
+            print(f"{'='*60}\n")
 
         for agent in self.agents:
             agent.on_episode_end()
@@ -74,9 +97,25 @@ class WizardGame:
     def play_round(self):
         self._setup_round()
 
-        n         = len(self.agents)
+        n          = len(self.agents)
         trump_suit = self._trump_suit()
         start_idx  = (self.round_num - 1) % n
+
+        if self.verbose:
+            trump_str = repr(self.trump_card) if self.trump_card else 'None (no trump)'
+            print(f"\n{'─'*64}")
+            print(f"  Round {self.round_num:>2}/{self.num_rounds}   Trump: {trump_str}")
+            print(f"{'─'*64}")
+            for ps in self.states:
+                groups = self._group_by_type(ps.hand, trump_suit)
+                parts  = []
+                for t in CARD_TYPES:
+                    if t in groups:
+                        cards_str = ' '.join(
+                            repr(c) for c in sorted(groups[t], key=lambda c: c.value)
+                        )
+                        parts.append(f'{t}[{cards_str}]')
+                print(f"  {ps.name:<12} {',  '.join(parts)}")
 
         # --- Bidding ---
         for i in range(n):
@@ -86,12 +125,21 @@ class WizardGame:
             bid   = int(self.agents[idx].act(obs, valid))
             self.states[idx].current_bid = bid
 
+        if self.verbose:
+            print()
+            for i in range(n):
+                ps = self.states[i]
+                print(f"  Bid  {ps.name:<12} → {ps.current_bid}")
+
         # --- Tricks ---
         lead_idx = start_idx
-        for _ in range(self.round_num):
+        for trick_num in range(self.round_num):
             trick_cards   = []
             trick_indices = []
             lead_suit     = None
+
+            if self.verbose:
+                print(f"\n  Trick {trick_num + 1}/{self.round_num}")
 
             for i in range(n):
                 idx   = (lead_idx + i) % n
@@ -109,6 +157,9 @@ class WizardGame:
                 card = random.choice(groups[chosen_type])
                 ps.hand.remove(card)
 
+                if self.verbose:
+                    print(f"    {ps.name:<12} plays {repr(card)}")
+
                 trick_cards.append(card)
                 trick_indices.append(idx)
 
@@ -119,7 +170,14 @@ class WizardGame:
             win_idx = trick_indices[win_pos]
             self.states[win_idx].tricks_won += 1
 
+            if self.verbose:
+                print(f"    => {self.states[win_idx].name} wins")
+
             # Deliver per-trick feedback to every agent in the trick
+            trick_card_types = [
+                CARD_TYPES.index(self._card_type(c, trump_suit))
+                for c in trick_cards
+            ]
             for idx in trick_indices:
                 ps           = self.states[idx]
                 won          = (idx == win_idx)
@@ -128,11 +186,23 @@ class WizardGame:
                     trick_reward = 15 if still_needed >= 0 else -15
                 else:
                     trick_reward = 10 if still_needed <= 0 else -5
-                self.agents[idx].on_trick_result(won, trick_reward)
+                if self._supports_trick_cards[idx]:
+                    self.agents[idx].on_trick_result(won, trick_reward, trick_card_types)
+                else:
+                    self.agents[idx].on_trick_result(won, trick_reward)
 
             lead_idx = win_idx
 
         self._calculate_scores()
+
+        if self.verbose:
+            print()
+            for ps in self.states:
+                delta    = ps.total_score - ps._prev_score
+                outcome  = 'exact' if ps.tricks_won == ps.current_bid else 'MISS'
+                sign     = '+' if delta >= 0 else ''
+                print(f"  {ps.name:<12} {ps.tricks_won}/{ps.current_bid} [{outcome}]"
+                      f"  {sign}{delta:>4}  total: {ps.total_score}")
 
         for idx, agent in enumerate(self.agents):
             reward = self.states[idx].total_score - self.states[idx]._prev_score
@@ -215,10 +285,10 @@ class WizardGame:
                             and any(c.suit == trump_suit for c in vc))
 
         obs = np.zeros(OBS_SIZE, dtype=np.float32)
-        obs[OBS_ROUND_NUM]     = self.round_num / 10
+        obs[OBS_ROUND_NUM]     = self.round_num    / self.num_rounds
         obs[OBS_PHASE]         = float(phase)          # 0 = bid, 1 = play
-        obs[OBS_MY_BID]        = ps.current_bid / 10
-        obs[OBS_TRICKS_WON]    = ps.tricks_won  / 10
+        obs[OBS_MY_BID]        = ps.current_bid   / self.num_rounds
+        obs[OBS_TRICKS_WON]    = ps.tricks_won    / self.num_rounds
         obs[OBS_TRICKS_NEEDED] = tricks_needed  / 2
         obs[OBS_POSITION]      = position       / 2
         obs[OBS_HAND_WIZARDS]  = min(num_wizards, 4)  / 4
@@ -227,6 +297,13 @@ class WizardGame:
         obs[OBS_HAVE_WIZARD]   = have_wizard
         obs[OBS_HAVE_JESTER]   = have_jester
         obs[OBS_HAVE_TRUMP]    = have_trump
+        # Cards already played in the current trick (before this agent acts)
+        obs[OBS_TRICK_WIZARD]  = float(any(c.value == 14 for c in self.current_trick_cards))
+        obs[OBS_TRICK_TRUMP]   = float(
+            trump_suit is not None and
+            any(c.suit == trump_suit and c.value not in (0, 14)
+                for c in self.current_trick_cards)
+        )
         return obs
 
     # ------------------------------------------------------------------

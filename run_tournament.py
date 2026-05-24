@@ -11,7 +11,7 @@ Common code in common/ is SHARED — do not modify it.
 import sys
 import io
 from agents.agent_qtable import QTableAgent
-from agents.agent_dqn    import DQNAgent
+from agents.agent_dqn    import DQNAgent, DQNAgentSplit, DQNAgentShared
 from agents.agent_ppo    import PPOAgent
 from agents.random_agent import RandomAgent
 from common.game         import WizardGame
@@ -65,8 +65,14 @@ run_tournament(
         ("QTable vs QTable vs QTable",
          [QTableAgent(f'QT_{i}') for i in range(3)]),
 
-        ("DQN vs DQN vs DQN",
+        ("DQN baseline vs itself",
          [DQNAgent(f'DQN_{i}') for i in range(3)]),
+
+        ("DQN split-input vs itself",
+         [DQNAgentSplit(f'DQNs_{i}') for i in range(3)]),
+
+        ("DQN shared-backbone vs itself",
+         [DQNAgentShared(f'DQNh_{i}') for i in range(3)]),
 
         ("PPO vs PPO vs PPO",
          [PPOAgent(f'PPO_{i}') for i in range(3)]),

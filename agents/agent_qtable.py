@@ -48,9 +48,9 @@ class QTableAgent(BaseAgent):
 
     def __init__(self, name,
                  alpha=0.05,           # learning rate
-                 gamma=0.9,           # discount factor
+                 gamma=0.9,           # discount factor 0.9
                  epsilon=0.9,         # starting exploration rate
-                 epsilon_decay=0.997,
+                 epsilon_decay=0.999,
                  epsilon_min=0.01):
         super().__init__(name)
         self.alpha         = alpha
@@ -73,25 +73,30 @@ class QTableAgent(BaseAgent):
 
     def _bid_state(self, obs) -> tuple:
         """
-        Improved bid state: Keeps round number, but simplifies hand features 
-        to prevent the state space from getting too massive.
+        Improved bid state: Expanded the resolution for high cards and trump cards 
+        to allow the agent to better distinguish between 'good' and 'great' hands 
+        in the later rounds when hands are larger.
         """
         round_num   = round(obs[OBS_ROUND_NUM] * 10)
         num_wizards = round(obs[OBS_HAND_WIZARDS] * 4)
         num_high    = round(obs[OBS_HAND_HIGH] * 10)
         num_trump   = round(obs[OBS_HAND_TRUMP] * 10)
         
-        # We clamp these to smaller bins (0, 1, 2, or 3+) to keep the table manageable
+        # We clamp these to smaller bins (0, 1, 2, 3, 4, 5+) to keep the table manageable
         return (round_num,
                 min(num_wizards, 2),
-                min(num_high,    3),
-                min(num_trump,   3))
+                min(num_high,    5),
+                min(num_trump,   5))
 
     def _play_state(self, obs) -> tuple:
         """
-        Improved play state: Adds information about remaining high/trump cards in hand.
-        Knowing if you *have* high cards left is critical for deciding to win or lose a trick.
+        Improved play state: Added 'is_late_game' context. Playing a card when 
+        you only have 2 cards total (early game) requires different logic than 
+        when you are managing a 10-card hand (late game)
         """
+        round_num     = round(obs[OBS_ROUND_NUM] * 10)
+        is_late_game  = bool(round_num > 5) # True for rounds 6-10
+
         tricks_needed = round(obs[OBS_TRICKS_NEEDED] * 2)   # -2..2
         position      = round(obs[OBS_POSITION]      * 2)   # 0..2
         
@@ -99,11 +104,11 @@ class QTableAgent(BaseAgent):
         have_jester_valid = bool(obs[OBS_HAVE_JESTER] > 0.5)
         have_trump_valid  = bool(obs[OBS_HAVE_TRUMP]  > 0.5)
         
-        # NEW: Broad categorization of remaining hand strength
+        #Broad categorization of remaining hand strength
         has_high_in_hand  = bool(obs[OBS_HAND_HIGH] > 0.0)
         has_trump_in_hand = bool(obs[OBS_HAND_TRUMP] > 0.0)
 
-        return (tricks_needed, position, 
+        return (is_late_game,tricks_needed, position, 
                 have_wizard_valid, have_jester_valid, have_trump_valid,
                 has_high_in_hand, has_trump_in_hand)
 
@@ -173,6 +178,7 @@ class QTableAgent(BaseAgent):
             steps_from_end = n - 1 - i
             self._update_q(self.play_q, state, action,
                            reward * (self.gamma ** steps_from_end))
+
 
     def on_episode_end(self):
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)

@@ -48,10 +48,10 @@ class QTableAgent(BaseAgent):
 
     def __init__(self, name,
                  alpha=0.1,           # learning rate
-                 gamma=0.9,           # discount factor
+                 gamma=0.95,           # discount factor
                  epsilon=0.9,         # starting exploration rate
-                 epsilon_decay=0.997,
-                 epsilon_min=0.05):
+                 epsilon_decay=0.995,
+                 epsilon_min=0.01):
         super().__init__(name)
         self.alpha         = alpha
         self.gamma         = gamma

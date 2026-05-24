@@ -47,10 +47,10 @@ class QTableAgent(BaseAgent):
     """
 
     def __init__(self, name,
-                 alpha=0.1,           # learning rate
-                 gamma=0.95,           # discount factor
+                 alpha=0.05,           # learning rate
+                 gamma=0.9,           # discount factor
                  epsilon=0.9,         # starting exploration rate
-                 epsilon_decay=0.995,
+                 epsilon_decay=0.997,
                  epsilon_min=0.01):
         super().__init__(name)
         self.alpha         = alpha
@@ -73,28 +73,39 @@ class QTableAgent(BaseAgent):
 
     def _bid_state(self, obs) -> tuple:
         """
-        4-element tuple used as the key in bid_q.
-        All values are clamped to small integers to keep the table small.
+        Improved bid state: Keeps round number, but simplifies hand features 
+        to prevent the state space from getting too massive.
         """
-        round_num   = round(obs[OBS_ROUND_NUM]    * 10)
-        num_wizards = round(obs[OBS_HAND_WIZARDS]  * 4)
-        num_high    = round(obs[OBS_HAND_HIGH]     * 10)
-        num_trump   = round(obs[OBS_HAND_TRUMP]    * 10)
+        round_num   = round(obs[OBS_ROUND_NUM] * 10)
+        num_wizards = round(obs[OBS_HAND_WIZARDS] * 4)
+        num_high    = round(obs[OBS_HAND_HIGH] * 10)
+        num_trump   = round(obs[OBS_HAND_TRUMP] * 10)
+        
+        # We clamp these to smaller bins (0, 1, 2, or 3+) to keep the table manageable
         return (round_num,
-                min(num_wizards, 3),
+                min(num_wizards, 2),
                 min(num_high,    3),
                 min(num_trump,   3))
 
     def _play_state(self, obs) -> tuple:
         """
-        5-element tuple used as the key in play_q.
+        Improved play state: Adds information about remaining high/trump cards in hand.
+        Knowing if you *have* high cards left is critical for deciding to win or lose a trick.
         """
         tricks_needed = round(obs[OBS_TRICKS_NEEDED] * 2)   # -2..2
         position      = round(obs[OBS_POSITION]      * 2)   # 0..2
-        have_wizard   = bool(obs[OBS_HAVE_WIZARD] > 0.5)
-        have_jester   = bool(obs[OBS_HAVE_JESTER] > 0.5)
-        have_trump    = bool(obs[OBS_HAVE_TRUMP]  > 0.5)
-        return (tricks_needed, position, have_wizard, have_jester, have_trump)
+        
+        have_wizard_valid = bool(obs[OBS_HAVE_WIZARD] > 0.5)
+        have_jester_valid = bool(obs[OBS_HAVE_JESTER] > 0.5)
+        have_trump_valid  = bool(obs[OBS_HAVE_TRUMP]  > 0.5)
+        
+        # NEW: Broad categorization of remaining hand strength
+        has_high_in_hand  = bool(obs[OBS_HAND_HIGH] > 0.0)
+        has_trump_in_hand = bool(obs[OBS_HAND_TRUMP] > 0.0)
+
+        return (tricks_needed, position, 
+                have_wizard_valid, have_jester_valid, have_trump_valid,
+                has_high_in_hand, has_trump_in_hand)
 
     # ------------------------------------------------------------------
     # Q-table helpers
@@ -143,7 +154,10 @@ class QTableAgent(BaseAgent):
         if not self._play_experiences:
             return
         state, action = self._play_experiences[-1]
-        self._update_q(self.play_q, state, action, trick_reward)
+        # Reward shaping: apply a small multiplier to trick rewards to balance 
+        # against the massive round-end rewards (which range from -100 to +120)
+        shaped_trick_reward = trick_reward * 0.5 
+        self._update_q(self.play_q, state, action, shaped_trick_reward)
 
     def on_round_end(self, reward: float):
         """

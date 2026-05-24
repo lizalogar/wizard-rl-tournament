@@ -65,17 +65,17 @@ run_tournament(
         ("QTable vs QTable vs QTable",
          [QTableAgent(f'QT_{i}') for i in range(3)]),
 
-        # ("DQN baseline vs itself",
-        #  [DQNAgent(f'DQN_{i}') for i in range(3)]),
+        ("DQN baseline vs itself",
+         [DQNAgent(f'DQN_{i}') for i in range(3)]),
 
-        # ("DQN split-input vs itself",
-        #  [DQNAgentSplit(f'DQNs_{i}') for i in range(3)]),
+        ("DQN split-input vs itself",
+         [DQNAgentSplit(f'DQNs_{i}') for i in range(3)]),
 
-        # ("DQN shared-backbone vs itself",
-        #  [DQNAgentShared(f'DQNh_{i}') for i in range(3)]),
+        ("DQN shared-backbone vs itself",
+         [DQNAgentShared(f'DQNh_{i}') for i in range(3)]),
 
-        # ("PPO vs PPO vs PPO",
-        #  [PPOAgent(f'PPO_{i}') for i in range(3)]),
+        ("PPO vs PPO vs PPO",
+         [PPOAgent(f'PPO_{i}') for i in range(3)]),
 
         # --- Three-way head-to-head ---
         ("QTable vs DQN vs PPO",
@@ -85,11 +85,11 @@ run_tournament(
         ("QTable vs 2 random",
          [QTableAgent('QT'), RandomAgent('R1'), RandomAgent('R2')]),
 
-        # ("DQN vs 2 random",
-        #  [DQNAgent('DQN'), RandomAgent('R1'), RandomAgent('R2')]),
+        ("DQN vs 2 random",
+         [DQNAgent('DQN'), RandomAgent('R1'), RandomAgent('R2')]),
 
-        # ("PPO vs 2 random",
-        #  [PPOAgent('PPO'), RandomAgent('R1'), RandomAgent('R2')]),
+        ("PPO vs 2 random",
+         [PPOAgent('PPO'), RandomAgent('R1'), RandomAgent('R2')]),
     ],
     train_episodes=1000,    #gal note: daj na 5000, ker si poveco q-table dim.
     eval_episodes=200,

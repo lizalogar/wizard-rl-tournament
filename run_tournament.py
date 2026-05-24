@@ -78,8 +78,8 @@ run_tournament(
         #  [PPOAgent(f'PPO_{i}') for i in range(3)]),
 
         # --- Three-way head-to-head ---
-        ("QTable vs DQN vs PPO",
-         [QTableAgent('QT'), DQNAgent('DQN'), PPOAgent('PPO')]),
+        # ("QTable vs DQN vs PPO",
+        #  [QTableAgent('QT'), DQNAgent('DQN'), PPOAgent('PPO')]),
 
         # --- Each agent vs 2 randoms (skill ceiling test) ---
         ("QTable vs 2 random",
@@ -91,6 +91,6 @@ run_tournament(
         # ("PPO vs 2 random",
         #  [PPOAgent('PPO'), RandomAgent('R1'), RandomAgent('R2')]),
     ],
-    train_episodes=1000,    #gal note: daj na 5000, ker si poveco q-table dim.
+    train_episodes=5000,    #gal note: daj na 5000, ker si poveco q-table dim.
     eval_episodes=200,
 )

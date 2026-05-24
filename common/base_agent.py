@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 
 # ------------------------------------------------------------------
-# Observation vector  (12 floats, all roughly in [0, 1])
+# Observation vector  (15 floats, all roughly in [0, 1])
 # ------------------------------------------------------------------
 # Index constants so agents don't have to use magic numbers.
 
@@ -25,7 +25,11 @@ OBS_HAND_TRUMP    = 8   # trump-suit cards in hand / 10
 OBS_HAVE_WIZARD   = 9   # 1.0 if a wizard is in valid_cards
 OBS_HAVE_JESTER   = 10  # 1.0 if a jester is in valid_cards
 OBS_HAVE_TRUMP    = 11  # 1.0 if a trump card is in valid_cards
-OBS_SIZE          = 12
+# --- NEW FEATURES ---
+OBS_TRICK_HAS_LEAD        = 12  # 1.0 if a lead suit has been established
+OBS_WINNING_CARD_VALUE    = 13  # Value of current winning card / 14
+OBS_WINNING_CARD_IS_TRUMP = 14  # 1.0 if the current winning card is a trump card
+OBS_SIZE                  = 15  # Increased from 12
 
 # ------------------------------------------------------------------
 # Action encoding

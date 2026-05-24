@@ -31,7 +31,8 @@ from common.base_agent import (BaseAgent,
                                 OBS_ROUND_NUM, OBS_PHASE, OBS_HAND_WIZARDS,
                                 OBS_HAND_HIGH, OBS_HAND_TRUMP,
                                 OBS_TRICKS_NEEDED, OBS_POSITION,
-                                OBS_HAVE_WIZARD, OBS_HAVE_JESTER, OBS_HAVE_TRUMP)
+                                OBS_HAVE_WIZARD, OBS_HAVE_JESTER, OBS_HAVE_TRUMP,
+                                OBS_TRICK_HAS_LEAD, OBS_WINNING_CARD_VALUE, OBS_WINNING_CARD_IS_TRUMP)
 
 
 class QTableAgent(BaseAgent):
@@ -93,24 +94,31 @@ class QTableAgent(BaseAgent):
         Improved play state: Added 'is_late_game' context. Playing a card when 
         you only have 2 cards total (early game) requires different logic than 
         when you are managing a 10-card hand (late game)
+
+        Improved play state v2: Now integrates real-time information about the 
+        cards already played on the table.
         """
         round_num     = round(obs[OBS_ROUND_NUM] * 10)
-        is_late_game  = bool(round_num > 5) # True for rounds 6-10
+        is_late_game  = bool(round_num > 5)
 
-        tricks_needed = round(obs[OBS_TRICKS_NEEDED] * 2)   # -2..2
-        position      = round(obs[OBS_POSITION]      * 2)   # 0..2
+        tricks_needed = round(obs[OBS_TRICKS_NEEDED] * 2)
+        position      = round(obs[OBS_POSITION] * 2)
         
         have_wizard_valid = bool(obs[OBS_HAVE_WIZARD] > 0.5)
         have_jester_valid = bool(obs[OBS_HAVE_JESTER] > 0.5)
         have_trump_valid  = bool(obs[OBS_HAVE_TRUMP]  > 0.5)
         
-        #Broad categorization of remaining hand strength
-        has_high_in_hand  = bool(obs[OBS_HAND_HIGH] > 0.0)
-        has_trump_in_hand = bool(obs[OBS_HAND_TRUMP] > 0.0)
+        # --- Engine v2 Features ---
+        trick_has_lead = bool(obs[OBS_TRICK_HAS_LEAD] > 0.5)
+        
+        # We classify the winning card as "dangerous" if it's a High Card (>=10) or a Trump
+        winning_card_val = round(obs[OBS_WINNING_CARD_VALUE] * 14)
+        winning_is_trump = bool(obs[OBS_WINNING_CARD_IS_TRUMP] > 0.5)
+        is_winning_card_dangerous = bool(winning_card_val >= 10 or winning_is_trump)
 
-        return (is_late_game,tricks_needed, position, 
+        return (is_late_game, tricks_needed, position, 
                 have_wizard_valid, have_jester_valid, have_trump_valid,
-                has_high_in_hand, has_trump_in_hand)
+                trick_has_lead, is_winning_card_dangerous)
 
     # ------------------------------------------------------------------
     # Q-table helpers

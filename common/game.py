@@ -20,7 +20,7 @@ from .base_agent import (
     OBS_TRICKS_WON, OBS_TRICKS_NEEDED, OBS_POSITION,
     OBS_HAND_WIZARDS, OBS_HAND_HIGH, OBS_HAND_TRUMP,
     OBS_HAVE_WIZARD, OBS_HAVE_JESTER, OBS_HAVE_TRUMP,
-    CARD_TYPES,
+    CARD_TYPES, OBS_TRICK_HAS_LEAD, OBS_WINNING_CARD_VALUE, OBS_WINNING_CARD_IS_TRUMP
 )
 
 
@@ -213,6 +213,26 @@ class WizardGame:
         have_jester = float(any(c.value == 0  for c in vc))
         have_trump  = float(trump_suit is not None
                             and any(c.suit == trump_suit for c in vc))
+        
+        # --- NEW LOGIC: Analyze the current trick ---
+        trick_has_lead = 0.0
+        win_val = 0.0
+        win_is_trump = 0.0
+
+        if len(self.current_trick_cards) > 0:
+            # Check if a lead suit exists (first card that isn't a Jester)
+            for c in self.current_trick_cards:
+                if c.value != 0:
+                    trick_has_lead = 1.0
+                    break
+            
+            # Find the currently winning card
+            win_idx = self._evaluate_trick(self.current_trick_cards)
+            winning_card = self.current_trick_cards[win_idx]
+            
+            win_val = winning_card.value / 14.0
+            if trump_suit and winning_card.suit == trump_suit:
+                win_is_trump = 1.0
 
         obs = np.zeros(OBS_SIZE, dtype=np.float32)
         obs[OBS_ROUND_NUM]     = self.round_num / 10
@@ -227,6 +247,9 @@ class WizardGame:
         obs[OBS_HAVE_WIZARD]   = have_wizard
         obs[OBS_HAVE_JESTER]   = have_jester
         obs[OBS_HAVE_TRUMP]    = have_trump
+        obs[OBS_TRICK_HAS_LEAD]        = trick_has_lead
+        obs[OBS_WINNING_CARD_VALUE]    = win_val
+        obs[OBS_WINNING_CARD_IS_TRUMP] = win_is_trump
         return obs
 
     # ------------------------------------------------------------------

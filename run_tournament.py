@@ -4,24 +4,31 @@ run_tournament.py  —  entry point for the shared project.
 Run from the project root:
     python run_tournament.py
 
-Each colleague implements their agent in agents/agent_*.py.
-Common code in common/ is SHARED — do not modify it.
+Set LOAD_PRETRAINED = True to skip training and load saved models from
+the models/ folder instead — useful for competing pre-trained agents.
 """
 
-import sys
-import io
+import os
 from agents.agent_qtable import QTableAgent
 from agents.agent_dqn    import DQNAgent
 from agents.agent_ppo    import PPOAgent
 from agents.random_agent import RandomAgent
-from common.game         import WizardGame
-from common.tournament   import (train_agents, evaluate_vs_random,
-                                  evaluate_vs_self, run_tournament, grid_search)
+from common.tournament   import run_tournament, grid_search
+
+# ================================================================
+# Config
+# ================================================================
+
+MODELS_DIR      = 'models'
+LOAD_PRETRAINED = False   # True = load saved weights, skip training
+TRAIN_EPISODES  = 3000    # increased from 1000 — QTable needs more with larger dims
+EVAL_EPISODES   = 200
+
+os.makedirs(MODELS_DIR, exist_ok=True)
 
 
 # ================================================================
 # Optional: grid search to find best hyperparameters per agent
-# (comment out if you just want a quick tournament run)
 # ================================================================
 
 # print("\n>>> QTableAgent grid search")
@@ -52,39 +59,77 @@ from common.tournament   import (train_agents, evaluate_vs_random,
 
 
 # ================================================================
-# Tournament
+# Matchups
 # ================================================================
 
-run_tournament(
-    matchups=[
-        # --- Baselines ---
-        ("Random x3",
-         [RandomAgent(f'R{i}') for i in range(3)]),
+matchups = [
+    # --- Baselines ---
+    ("Random x3",
+     [RandomAgent(f'R{i}') for i in range(3)]),
 
-        # --- Each agent type playing against itself (self-play) ---
-        ("QTable vs QTable vs QTable",
-         [QTableAgent(f'QT_{i}') for i in range(3)]),
+    # --- Each agent type playing against itself (self-play) ---
+    ("QTable vs QTable vs QTable",
+     [QTableAgent(f'QT_{i}') for i in range(3)]),
 
-        ("DQN vs DQN vs DQN",
-         [DQNAgent(f'DQN_{i}') for i in range(3)]),
+    ("DQN baseline vs itself",
+     [DQNAgent(f'DQN_{i}') for i in range(3)]),
 
-        ("PPO vs PPO vs PPO",
-         [PPOAgent(f'PPO_{i}') for i in range(3)]),
+    ("DQN split-input vs itself",
+     [DQNAgentSplit(f'DQNs_{i}') for i in range(3)]),
 
-        # --- Three-way head-to-head ---
-        ("QTable vs DQN vs PPO",
-         [QTableAgent('QT'), DQNAgent('DQN'), PPOAgent('PPO')]),
+    ("DQN shared-backbone vs itself",
+     [DQNAgentShared(f'DQNh_{i}') for i in range(3)]),
 
-        # --- Each agent vs 2 randoms (skill ceiling test) ---
-        ("QTable vs 2 random",
-         [QTableAgent('QT'), RandomAgent('R1'), RandomAgent('R2')]),
+    ("PPO vs PPO vs PPO",
+     [PPOAgent(f'PPO_{i}') for i in range(3)]),
 
-        ("DQN vs 2 random",
-         [DQNAgent('DQN'), RandomAgent('R1'), RandomAgent('R2')]),
+    # --- Three-way head-to-head ---
+    ("QTable vs DQN vs PPO",
+     [QTableAgent('QT'), DQNAgent('DQN'), PPOAgent('PPO')]),
 
-        ("PPO vs 2 random",
-         [PPOAgent('PPO'), RandomAgent('R1'), RandomAgent('R2')]),
-    ],
-    train_episodes=1000,
-    eval_episodes=200,
-)
+    # --- Each agent vs 2 randoms (skill ceiling test) ---
+    ("QTable vs 2 random",
+     [QTableAgent('QT'), RandomAgent('R1'), RandomAgent('R2')]),
+
+    ("DQN vs 2 random",
+     [DQNAgent('DQN'), RandomAgent('R1'), RandomAgent('R2')]),
+
+    ("PPO vs 2 random",
+     [PPOAgent('PPO'), RandomAgent('R1'), RandomAgent('R2')]),
+]
+
+
+# ================================================================
+# Load pre-trained weights (if requested)
+# ================================================================
+
+if LOAD_PRETRAINED:
+    print(f"Loading pre-trained models from '{MODELS_DIR}/' ...")
+    for _, agents in matchups:
+        for agent in agents:
+            path = os.path.join(MODELS_DIR, f'{agent.name}.pt')
+            if os.path.exists(path):
+                agent.load(path)
+    train_eps = 0   # skip training, go straight to evaluation
+else:
+    train_eps = TRAIN_EPISODES
+
+
+# ================================================================
+# Run tournament
+# ================================================================
+
+run_tournament(matchups, train_episodes=train_eps, eval_episodes=EVAL_EPISODES)
+
+
+# ================================================================
+# Save trained models
+# ================================================================
+
+if not LOAD_PRETRAINED:
+    print(f"\nSaving trained models to '{MODELS_DIR}/' ...")
+    for _, agents in matchups:
+        for agent in agents:
+            if not isinstance(agent, RandomAgent):
+                agent.save(os.path.join(MODELS_DIR, f'{agent.name}.pt'))
+    print("Done.")

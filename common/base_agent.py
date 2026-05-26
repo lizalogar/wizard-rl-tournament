@@ -27,7 +27,10 @@ OBS_HAVE_JESTER   = 10  # 1.0 if a jester is in valid_cards
 OBS_HAVE_TRUMP    = 11  # 1.0 if a trump card is in valid_cards
 OBS_TRICK_WIZARD  = 12  # 1.0 if a wizard has already been played in this trick
 OBS_TRICK_TRUMP   = 13  # 1.0 if a trump has already been played in this trick
-OBS_SIZE          = 14
+OBS_HAND_MAX_TRUMP = 14 # highest trump rank in hand / 13  (0 if no trump)
+OBS_OPP_MAX_NEED  = 15  # max opponent (bid - won) across opponents, clamped [-2,2] / 2
+OBS_OPP_MIN_NEED  = 16  # min opponent (bid - won) across opponents, clamped [-2,2] / 2
+OBS_SIZE          = 17
 
 # ------------------------------------------------------------------
 # Action encoding

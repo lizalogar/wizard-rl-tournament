@@ -20,12 +20,29 @@ class Deck:
         self._build()
 
     def _build(self):
+        card_id = 0
+        
+        # 0 to 51: Standard colored cards
         for suit in SUITS:
             for value in range(1, 14):
-                self.cards.append(Card(suit, value))
+                c = Card(suit, value)
+                c.id = card_id
+                self.cards.append(c)
+                card_id += 1
+                
+        # 52 to 55: The 4 Jesters
         for _ in range(4):
-            self.cards.append(Card('None', 0))   # Jester
-            self.cards.append(Card('None', 14))  # Wizard
+            c = Card('None', 0)
+            c.id = card_id
+            self.cards.append(c)
+            card_id += 1
+            
+        # 56 to 59: The 4 Wizards
+        for _ in range(4):
+            c = Card('None', 14)
+            c.id = card_id
+            self.cards.append(c)
+            card_id += 1
 
     def shuffle(self):
         random.shuffle(self.cards)

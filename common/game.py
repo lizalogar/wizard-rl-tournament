@@ -22,6 +22,7 @@ from .base_agent import (
     OBS_HAND_WIZARDS, OBS_HAND_HIGH, OBS_HAND_TRUMP,
     OBS_HAVE_WIZARD, OBS_HAVE_JESTER, OBS_HAVE_TRUMP,
     OBS_TRICK_WIZARD, OBS_TRICK_TRUMP,
+    OBS_HAND_MAX_TRUMP, OBS_OPP_MAX_NEED, OBS_OPP_MIN_NEED,
     CARD_TYPES,
 )
 
@@ -53,19 +54,23 @@ class WizardGame:
             for a in agents
         ]
 
+        # Check once which agents want the card-groups dict passed to act()
+        self._supports_groups = [
+            len(inspect.signature(a.act).parameters) >= 3
+            for a in agents
+        ]
+
+        # How many obs features each agent expects (defaults to OBS_SIZE for agents that don't declare obs_size)
+        self._agent_obs_size = [getattr(a, 'obs_size', OBS_SIZE) for a in agents]
+
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
 
     def play_episode(self) -> list:
         """
-        Play a full game (num_rounds rounds: 60 // num_players).
-
-        Resets scores, then plays all rounds.
-        Calls agent.on_episode_end() for every agent at the end.
-        Returns list of final total scores, one per agent.
+        Play a full game (num_rounds rounds).
         """
-        self.round_num = 1
         for ps in self.states:
             ps.total_score = 0
 
@@ -74,7 +79,10 @@ class WizardGame:
             print(f"  WIZARD  |  {len(self.agents)} players  |  {self.num_rounds} rounds")
             print(f"{'='*60}")
 
-        for _ in range(self.num_rounds):
+        for round_num in range(1, self.num_rounds + 1):
+            self.round_num = round_num
+            # Initialize exact card memory perfectly before each round
+            self._burned_cards = np.zeros(60, dtype=np.float32)
             self.play_round()
 
         if self.verbose:
@@ -120,9 +128,18 @@ class WizardGame:
         # --- Bidding ---
         for i in range(n):
             idx   = (start_idx + i) % n
-            obs   = self._build_obs(idx, phase=0)
+            agent = self.agents[idx]
+            is_advanced = getattr(agent, 'uses_exact_cards', False)
+            
             valid = list(range(self.round_num + 1))   # bids 0..round_num
-            bid   = int(self.agents[idx].act(obs, valid))
+            
+            if is_advanced:
+                obs = self._build_exact_obs(self.states[idx], [], self.round_num, phase=0.0)
+                bid = int(agent.act(obs, valid))
+            else:
+                obs = self._build_obs(idx, phase=0)[:self._agent_obs_size[idx]]
+                bid = int(agent.act(obs, valid))
+                
             self.states[idx].current_bid = bid
 
         if self.verbose:
@@ -144,24 +161,46 @@ class WizardGame:
             for i in range(n):
                 idx   = (lead_idx + i) % n
                 ps    = self.states[idx]
-                valid = self._get_valid_cards(ps.hand, lead_suit)
+                agent = self.agents[idx]
+                is_advanced = getattr(agent, 'uses_exact_cards', False)
 
                 self.current_trick_cards = trick_cards
-                groups     = self._group_by_type(valid, trump_suit)
-                type_valid = [CARD_TYPES.index(t) for t in groups]
 
-                obs    = self._build_obs(idx, phase=1, valid_cards=valid)
-                action = int(self.agents[idx].act(obs, type_valid))
+                if is_advanced:
+                    # ====== SMART AGENT LOGIC ======
+                    obs = self._build_exact_obs(ps, trick_cards, self.round_num, phase=1.0)
+                    legal_mask = self._get_exact_mask(ps.hand, lead_suit)
+                    
+                    chosen_card_id = agent.act(obs, legal_mask)
+                    
+                    # Find and pop that exact card from the hand
+                    card = next(c for c in ps.hand if getattr(c, 'id', -1) == chosen_card_id)
+                    ps.hand.remove(card)
+                else:
+                    # ====== LEGACY AGENT LOGIC ======
+                    valid = self._get_valid_cards(ps.hand, lead_suit)
+                    groups     = self._group_by_type(valid, trump_suit)
+                    type_valid = [CARD_TYPES.index(t) for t in groups]
 
-                chosen_type = CARD_TYPES[action]
-                card = random.choice(groups[chosen_type])
-                ps.hand.remove(card)
+                    obs    = self._build_obs(idx, phase=1, valid_cards=valid)[:self._agent_obs_size[idx]]
+                    if self._supports_groups[idx]:
+                        action = int(agent.act(obs, type_valid, groups))
+                    else:
+                        action = int(agent.act(obs, type_valid))
+
+                    chosen_type = CARD_TYPES[action]
+                    pick = getattr(agent, 'pick_card', None)
+                    card = pick(groups[chosen_type]) if pick else random.choice(groups[chosen_type])
+                    ps.hand.remove(card)
 
                 if self.verbose:
                     print(f"    {ps.name:<12} plays {repr(card)}")
 
                 trick_cards.append(card)
                 trick_indices.append(idx)
+                
+                # Remember exactly which card was burned
+                self._burned_cards[getattr(card, 'id', 0)] = 1.0
 
                 if lead_suit is None and card.value != 0:
                     lead_suit = card.suit
@@ -208,7 +247,52 @@ class WizardGame:
             reward = self.states[idx].total_score - self.states[idx]._prev_score
             agent.on_round_end(reward)
 
-        self.round_num += 1
+
+    # ------------------------------------------------------------------
+    # Advanced Observation Helpers
+    # ------------------------------------------------------------------
+
+    def _build_exact_obs(self, ps, trick_cards, round_number, phase) -> np.ndarray:
+        """Builds a 186-element array for advanced PPO agents."""
+        # 1. Game State (6 floats)
+        state = np.array([
+            round_number       / self.num_rounds,
+            phase,
+            ps.current_bid     / self.num_rounds,
+            ps.tricks_won      / self.num_rounds,
+            max(-2.0, min(2.0, ps.current_bid - ps.tricks_won)) / 2.0,
+            len(trick_cards)   / 2.0,
+        ], dtype=np.float32)
+        
+        # 2. Exact Hand (60 floats)
+        hand_arr = np.zeros(60, dtype=np.float32)
+        for c in ps.hand:
+            hand_arr[getattr(c, 'id', 0)] = 1.0
+            
+        # 3. Current Trick Context (60 floats)
+        trick_arr = np.zeros(60, dtype=np.float32)
+        for c in trick_cards:
+            trick_arr[getattr(c, 'id', 0)] = 1.0
+            
+        # 4. Perfect Memory - cards burned this round (60 floats)
+        return np.concatenate([state, hand_arr, trick_arr, self._burned_cards])
+
+    def _get_exact_mask(self, hand, lead_suit) -> np.ndarray:
+        """Returns a 60-element array where 1.0 means the exact card is legal to play."""
+        mask = np.zeros(60, dtype=np.float32)
+        has_lead_suit = any(c.suit == lead_suit for c in hand) if lead_suit else False
+        
+        for c in hand:
+            c_id = getattr(c, 'id', 0)
+            if c.value == 0 or c.value == 14:  # Jesters and Wizards always legal
+                mask[c_id] = 1.0
+            elif lead_suit and has_lead_suit:
+                if c.suit == lead_suit:
+                    mask[c_id] = 1.0
+            else:
+                mask[c_id] = 1.0
+                
+        return mask
 
     # ------------------------------------------------------------------
     # Setup helpers
@@ -304,6 +388,23 @@ class WizardGame:
             any(c.suit == trump_suit and c.value not in (0, 14)
                 for c in self.current_trick_cards)
         )
+
+        # Highest trump rank in hand — tells agent how strong its best trump is
+        if trump_suit:
+            trump_ranks = [c.value for c in ps.hand
+                           if c.suit == trump_suit and c.value not in (0, 14)]
+            obs[OBS_HAND_MAX_TRUMP] = (max(trump_ranks) / 13.0) if trump_ranks else 0.0
+        else:
+            obs[OBS_HAND_MAX_TRUMP] = 0.0
+
+        # Opponent bid pressure: max and min of (bid - tricks_won) across all opponents
+        opp_needs = [
+            max(-2.0, min(2.0, float(s.current_bid - s.tricks_won)))
+            for i, s in enumerate(self.states) if i != agent_idx
+        ]
+        obs[OBS_OPP_MAX_NEED] = (max(opp_needs) / 2.0) if opp_needs else 0.0
+        obs[OBS_OPP_MIN_NEED] = (min(opp_needs) / 2.0) if opp_needs else 0.0
+
         return obs
 
     # ------------------------------------------------------------------

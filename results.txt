@@ -1,0 +1,8 @@
+Playing 1000 evaluation games between: ['QT', 'DQN', 'PPO', 'R', 'H', 'DT']...
+
+        QT:   49.6 avg points/game
+       DQN:   65.1 avg points/game
+       PPO:   33.2 avg points/game
+         R:  -28.1 avg points/game
+         H:   64.5 avg points/game
+        DT:  -22.7 avg points/game

@@ -13,6 +13,8 @@ from agents.agent_qtable import QTableAgent
 from agents.agent_dqn    import DQNAgent, DQNAgentSplit, DQNAgentShared
 from agents.agent_ppo    import PPOAgent
 from agents.random_agent import RandomAgent
+from agents.heuristic_dt_agent import HeuristicDTAgent
+from agents.heuristic_agent    import HeuristicAgent
 from common.tournament   import run_tournament, grid_search, evaluate_vs_self
 
 # ================================================================
@@ -20,7 +22,7 @@ from common.tournament   import run_tournament, grid_search, evaluate_vs_self
 # ================================================================
 
 MODELS_DIR      = 'models' 
-LOAD_PRETRAINED = False   # True = load saved weights, skip training
+LOAD_PRETRAINED = True   # True = load saved weights, skip training
 TRAIN_EPISODES  = 4000    # increased from 1000 — QTable needs more with larger dims
 EVAL_EPISODES   = 200
 
@@ -158,9 +160,14 @@ for agent in finale_agents:
         except FileNotFoundError:
             print(f"Warning: Could not find trained weights for {agent.name}")
 
-# 3. We can only play 3 agents at a time in Wizard.
-# Let's do a strict QT vs DQN vs PPO match.
-matchup = [finale_agents[0], finale_agents[1], finale_agents[2]]
+# Create 3 extra  agents to fill the table
+random_agent = RandomAgent('R')
+#heuristic dt model
+heuristic_agent_dt = HeuristicDTAgent('DT')
+#heuristic agent
+heuristic_agent = HeuristicAgent('H')
+
+matchup = [finale_agents[0], finale_agents[1], finale_agents[2]] + [random_agent] + [heuristic_agent] + [heuristic_agent_dt]
 print(f"Playing 1000 evaluation games between: {[a.name for a in matchup]}...\n")
 
 # evaluate_vs_self sets epsilon to 0 (greedy/evaluation mode) and returns a list of average scores

@@ -13,15 +13,15 @@ from agents.agent_qtable import QTableAgent
 from agents.agent_dqn    import DQNAgent, DQNAgentSplit, DQNAgentShared
 from agents.agent_ppo    import PPOAgent
 from agents.random_agent import RandomAgent
-from common.tournament   import run_tournament, grid_search
+from common.tournament   import run_tournament, grid_search, evaluate_vs_self
 
 # ================================================================
 # Config
 # ================================================================
 
-MODELS_DIR      = 'models'
+MODELS_DIR      = 'models' 
 LOAD_PRETRAINED = False   # True = load saved weights, skip training
-TRAIN_EPISODES  = 3000    # increased from 1000 — QTable needs more with larger dims
+TRAIN_EPISODES  = 4000    # increased from 1000 — QTable needs more with larger dims
 EVAL_EPISODES   = 200
 
 os.makedirs(MODELS_DIR, exist_ok=True)
@@ -89,7 +89,7 @@ matchups = [
 
     # --- Each agent vs 2 randoms (skill ceiling test) ---
     ("QTable vs 2 random",
-     [QTableAgent('QT'), RandomAgent('R1'), RandomAgent('R2')]),
+     [QTableAgent('QT_rand'), RandomAgent('R1'), RandomAgent('R2')]),
 
     ("DQN vs 2 random",
      [DQNAgent('DQN'), RandomAgent('R1'), RandomAgent('R2')]),
@@ -133,3 +133,38 @@ if not LOAD_PRETRAINED:
             if not isinstance(agent, RandomAgent):
                 agent.save(os.path.join(MODELS_DIR, f'{agent.name}.pt'))
     print("Done.")
+
+
+#------------------------------
+# FINAL RUN WITH SCORES
+#------------------------------
+print("\n" + "="*70)
+print(" GRAND FINALE: Individual Agent Scores")
+print("="*70)
+
+finale_agents = [
+    QTableAgent('QT'),
+    DQNAgent('DQN'),
+    PPOAgent('PPO'),
+    # You can even throw your new decision tree agent in here!
+    # HeuristicDTAgent('DT') 
+]
+
+# 2. Load their trained weights
+for agent in finale_agents:
+    if hasattr(agent, 'load'): # Random and Heuristic agents don't have weights to load
+        try:
+            agent.load(os.path.join(MODELS_DIR, f'{agent.name}.pt'))
+        except FileNotFoundError:
+            print(f"Warning: Could not find trained weights for {agent.name}")
+
+# 3. We can only play 3 agents at a time in Wizard.
+# Let's do a strict QT vs DQN vs PPO match.
+matchup = [finale_agents[0], finale_agents[1], finale_agents[2]]
+print(f"Playing 1000 evaluation games between: {[a.name for a in matchup]}...\n")
+
+# evaluate_vs_self sets epsilon to 0 (greedy/evaluation mode) and returns a list of average scores
+final_scores = evaluate_vs_self(matchup, num_episodes=1000)
+
+for agent, score in zip(matchup, final_scores):
+    print(f"{agent.name:>10}: {score:>6.1f} avg points/game")

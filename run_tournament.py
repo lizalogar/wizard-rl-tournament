@@ -10,7 +10,7 @@ the models/ folder instead — useful for competing pre-trained agents.
 
 import os
 from agents.agent_qtable import QTableAgent
-from agents.agent_dqn    import DQNAgent, DQNAgentSplit, DQNAgentShared
+from agents.agent_dqn    import DQNAgent
 from agents.agent_ppo    import PPOAgent
 from agents.random_agent import RandomAgent
 from common.tournament   import run_tournament, grid_search
@@ -39,11 +39,11 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 #         'gamma':         [0.8, 0.9],
 #         'epsilon_decay': [0.995, 0.997, 0.999],
 #     },
-#     train_episodes=3000,
-#     eval_episodes=200,
+#     train_episodes=500,
+#     eval_episodes=100,
 # )
 # qt_best = qt_results[0][0]
-
+#
 # print("\n>>> DQNAgent grid search")
 # dqn_results = grid_search(
 #     DQNAgent,

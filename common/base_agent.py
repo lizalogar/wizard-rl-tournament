@@ -25,7 +25,12 @@ OBS_HAND_TRUMP    = 8   # trump-suit cards in hand / 10
 OBS_HAVE_WIZARD   = 9   # 1.0 if a wizard is in valid_cards
 OBS_HAVE_JESTER   = 10  # 1.0 if a jester is in valid_cards
 OBS_HAVE_TRUMP    = 11  # 1.0 if a trump card is in valid_cards
-OBS_SIZE          = 12
+OBS_TRICK_WIZARD  = 12  # 1.0 if a wizard has already been played in this trick
+OBS_TRICK_TRUMP   = 13  # 1.0 if a trump has already been played in this trick
+OBS_HAND_MAX_TRUMP = 14 # highest trump rank in hand / 13  (0 if no trump)
+OBS_OPP_MAX_NEED  = 15  # max opponent (bid - won) across opponents, clamped [-2,2] / 2
+OBS_OPP_MIN_NEED  = 16  # min opponent (bid - won) across opponents, clamped [-2,2] / 2
+OBS_SIZE          = 17
 
 # ------------------------------------------------------------------
 # Action encoding
@@ -41,7 +46,7 @@ OBS_SIZE          = 12
 
 CARD_TYPES     = ['wizard', 'jester', 'trump', 'high', 'low']
 NUM_CARD_TYPES = 5    # size of the play action space
-MAX_BID        = 11   # size of the bid action space (bids 0..10)
+MAX_BID        = 21   # size of the bid action space (bids 0..20, for 3-player 20-round games)
 
 
 # ------------------------------------------------------------------
@@ -80,13 +85,16 @@ class BaseAgent(ABC):
             The engine picks a random card of that type from your hand.
         """
 
-    def on_trick_result(self, won_trick: bool, trick_reward: float = 0.0):
+    def on_trick_result(self, won_trick: bool, trick_reward: float = 0.0,
+                        trick_card_types: list = None):
         """
         Called right after each trick resolves.
 
-        won_trick    True if this agent won the trick
-        trick_reward immediate reward already computed (+15 / -15 / +10 / -5)
-                     based on whether winning this trick helps your bid
+        won_trick        True if this agent won the trick
+        trick_reward     immediate reward (+15 / -15 / +10 / -5)
+        trick_card_types list of CARD_TYPES indices in play order,
+                         e.g. [2, 0, 4] = trump, wizard, low
+                         Index 0 = lead player, 1 = second, etc.
         """
 
     def on_round_end(self, reward: float):

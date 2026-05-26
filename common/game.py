@@ -43,7 +43,7 @@ class WizardGame:
         self.agents     = agents
         self.states     = [PlayerState(a.name) for a in agents]
         self.round_num  = 1
-        self.num_rounds = 60 // len(agents)   # 3p→20, 4p→15, 5p→12, 6p→10
+        self.num_rounds = min(5, 60 // len(agents))  # capped at 5; natural: 3p→20, 4p→15, …
         self.verbose    = verbose
         self.trump_card          = None
         self.current_trick_cards = []   # cards played so far this trick
@@ -129,11 +129,12 @@ class WizardGame:
         for i in range(n):
             idx   = (start_idx + i) % n
             agent = self.agents[idx]
-            is_advanced = getattr(agent, 'uses_exact_cards', False)
-            
+            is_advanced     = getattr(agent, 'uses_exact_cards', False)
+            uses_exact_obs  = getattr(agent, 'uses_exact_obs',   False)
+
             valid = list(range(self.round_num + 1))   # bids 0..round_num
-            
-            if is_advanced:
+
+            if is_advanced or uses_exact_obs:
                 obs = self._build_exact_obs(self.states[idx], [], self.round_num, phase=0.0)
                 bid = int(agent.act(obs, valid))
             else:
@@ -162,27 +163,41 @@ class WizardGame:
                 idx   = (lead_idx + i) % n
                 ps    = self.states[idx]
                 agent = self.agents[idx]
-                is_advanced = getattr(agent, 'uses_exact_cards', False)
+                is_advanced    = getattr(agent, 'uses_exact_cards', False)
+                uses_exact_obs = getattr(agent, 'uses_exact_obs',   False)
 
                 self.current_trick_cards = trick_cards
 
                 if is_advanced:
-                    # ====== SMART AGENT LOGIC ======
+                    # ====== SMART AGENT LOGIC (exact obs + card-ID action) ======
                     obs = self._build_exact_obs(ps, trick_cards, self.round_num, phase=1.0)
                     legal_mask = self._get_exact_mask(ps.hand, lead_suit)
-                    
+
                     chosen_card_id = agent.act(obs, legal_mask)
-                    
+
                     # Find and pop that exact card from the hand
                     card = next(c for c in ps.hand if getattr(c, 'id', -1) == chosen_card_id)
                     ps.hand.remove(card)
-                else:
-                    # ====== LEGACY AGENT LOGIC ======
-                    valid = self._get_valid_cards(ps.hand, lead_suit)
+                elif uses_exact_obs:
+                    # ====== HYBRID AGENT LOGIC (exact obs + card-type action) ======
+                    obs = self._build_exact_obs(ps, trick_cards, self.round_num, phase=1.0)
+                    valid      = self._get_valid_cards(ps.hand, lead_suit)
                     groups     = self._group_by_type(valid, trump_suit)
                     type_valid = [CARD_TYPES.index(t) for t in groups]
 
-                    obs    = self._build_obs(idx, phase=1, valid_cards=valid)[:self._agent_obs_size[idx]]
+                    action = int(agent.act(obs, type_valid))
+
+                    chosen_type = CARD_TYPES[action]
+                    pick = getattr(agent, 'pick_card', None)
+                    card = pick(groups[chosen_type]) if pick else random.choice(groups[chosen_type])
+                    ps.hand.remove(card)
+                else:
+                    # ====== LEGACY AGENT LOGIC (simple obs + card-type action) ======
+                    valid      = self._get_valid_cards(ps.hand, lead_suit)
+                    groups     = self._group_by_type(valid, trump_suit)
+                    type_valid = [CARD_TYPES.index(t) for t in groups]
+
+                    obs = self._build_obs(idx, phase=1, valid_cards=valid)[:self._agent_obs_size[idx]]
                     if self._supports_groups[idx]:
                         action = int(agent.act(obs, type_valid, groups))
                     else:

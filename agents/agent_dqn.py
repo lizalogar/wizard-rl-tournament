@@ -6,6 +6,8 @@ DQN Agent — three architectural variants for comparison.
   DQNAgentShared  option 2  shared backbone (12→64→64) with two output heads
 
 Run all three in run_tournament.py to see which architecture learns best.
+Each agent records self.history with per-episode reward, loss, and epsilon
+for use in visualize_training.py.
 """
 
 import random
@@ -23,6 +25,7 @@ from common.base_agent import (BaseAgent, OBS_SIZE,
 # ------------------------------------------------------------------
 # Only the features that are actually meaningful for each decision.
 
+# those numbers are the indices of the features in the full obs vector that are relevant for each network
 BID_FEATURES  = [0, 6, 7, 8]              # round, wizards, high, trump in hand
 PLAY_FEATURES = [2, 3, 4, 5, 9, 10, 11]  # bid, tricks_won, needed, position,
                                            # have_wizard / have_jester / have_trump
@@ -35,6 +38,8 @@ _ZEROS_PLAY = np.zeros(len(PLAY_FEATURES), dtype=np.float32)  # terminal s' for 
 # ------------------------------------------------------------------
 # Neural networks
 # ------------------------------------------------------------------
+# Bid network:  12 inputs → 11 outputs (one Q-value per possible bid 0–10)
+# Play network: 12 inputs → 5 outputs  (one Q-value per card type)
 
 class QNetwork(nn.Module):
     """Standard two-hidden-layer network; outputs one Q-value per action."""
@@ -48,7 +53,7 @@ class QNetwork(nn.Module):
 
     def forward(self, x):
         return self.net(x)
-
+# forward just returns the output — it does not train the network. It's a pure forward pass: input goes in, Q-values come out.
 
 class SharedQNetwork(nn.Module):
     """
@@ -79,6 +84,14 @@ class SharedQNetwork(nn.Module):
 # ------------------------------------------------------------------
 # Replay buffer
 # ------------------------------------------------------------------
+# A buffer is just a storage container — in this case a list of
+# past experiences the agent has collected while playing games.
+
+# Without it, the agent would learn from each experience the
+# moment it happens and then throw it away.
+
+# The replay buffer fixes this by saving experiences
+# and training on random mixtures of them later:
 
 class ReplayBuffer:
     """
@@ -89,11 +102,14 @@ class ReplayBuffer:
     """
     def __init__(self, capacity=10_000):
         self.buf = deque(maxlen=capacity)
+        # deque is a Python list with a maximum size. Once it hits 10,000 entries,
+        # adding a new one automatically drops the oldest. No manual cleanup needed.
 
     def push(self, obs, action_idx, reward, next_obs, done):
         self.buf.append((obs, action_idx, reward, next_obs, float(done)))
 
     def sample(self, batch_size):
+        # sample — pulls a random mini-batch for training:
         batch = random.sample(self.buf, min(batch_size, len(self.buf)))
         obs, a, r, next_obs, done = zip(*batch)
         return (
@@ -146,6 +162,10 @@ class DQNAgent(BaseAgent):
         self._play_current        = None
         self._play_pending_reward = None
 
+        # metric tracking — one entry appended per episode in on_episode_end
+        self.history = {'reward': [], 'loss': [], 'epsilon': []}
+        self._episode_reward = 0.0
+
     def act(self, obs, valid_actions):
         phase = obs[OBS_PHASE]
         if phase < 0.5:
@@ -189,6 +209,7 @@ class DQNAgent(BaseAgent):
         self._play_current = None
 
     def on_round_end(self, reward):
+        self._episode_reward += reward
         if self._bid_pending is not None:
             obs, action = self._bid_pending
             self.bid_buf.push(obs, action, reward, _ZEROS_FULL, True)
@@ -196,8 +217,14 @@ class DQNAgent(BaseAgent):
 
     def on_episode_end(self):
         self._push_pending_play(_ZEROS_FULL, done=True)
-        self._train_step(self.bid_net,  self.bid_target,  self.bid_opt,  self.bid_buf)
-        self._train_step(self.play_net, self.play_target, self.play_opt, self.play_buf)
+        bid_loss  = self._train_step(self.bid_net,  self.bid_target,  self.bid_opt,  self.bid_buf)
+        play_loss = self._train_step(self.play_net, self.play_target, self.play_opt, self.play_buf)
+
+        self.history['reward'].append(self._episode_reward)
+        self.history['loss'].append(bid_loss + play_loss)
+        self.history['epsilon'].append(self.epsilon)
+        self._episode_reward = 0.0
+
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
         self._episodes_done += 1
         if self._episodes_done % self.target_update_freq == 0:
@@ -206,7 +233,7 @@ class DQNAgent(BaseAgent):
 
     def _train_step(self, net, target_net, opt, buf):
         if len(buf) < self.batch_size:
-            return
+            return 0.0
         obs, actions, rewards, next_obs, dones = buf.sample(self.batch_size)
         with torch.no_grad():
             next_q  = target_net(next_obs).max(1)[0]
@@ -216,6 +243,7 @@ class DQNAgent(BaseAgent):
         opt.zero_grad()
         loss.backward()
         opt.step()
+        return loss.item()
 
     def save(self, path):
         torch.save({'bid_net': self.bid_net.state_dict(),
@@ -254,6 +282,7 @@ class DQNAgentSplit(BaseAgent):
         self.target_update_freq = target_update_freq
         self._episodes_done     = 0
 
+        # Difference 1 — smaller network inputs:
         bid_in  = len(BID_FEATURES)
         play_in = len(PLAY_FEATURES)
 
@@ -273,6 +302,9 @@ class DQNAgentSplit(BaseAgent):
         self._bid_pending         = None
         self._play_current        = None
         self._play_pending_reward = None
+
+        self.history = {'reward': [], 'loss': [], 'epsilon': []}
+        self._episode_reward = 0.0
 
     def act(self, obs, valid_actions):
         phase = obs[OBS_PHASE]
@@ -320,6 +352,7 @@ class DQNAgentSplit(BaseAgent):
         self._play_current = None
 
     def on_round_end(self, reward):
+        self._episode_reward += reward
         if self._bid_pending is not None:
             obs, action = self._bid_pending
             self.bid_buf.push(obs, action, reward, _ZEROS_BID, True)
@@ -327,8 +360,14 @@ class DQNAgentSplit(BaseAgent):
 
     def on_episode_end(self):
         self._push_pending_play(None, done=True)
-        self._train_step(self.bid_net,  self.bid_target,  self.bid_opt,  self.bid_buf)
-        self._train_step(self.play_net, self.play_target, self.play_opt, self.play_buf)
+        bid_loss  = self._train_step(self.bid_net,  self.bid_target,  self.bid_opt,  self.bid_buf)
+        play_loss = self._train_step(self.play_net, self.play_target, self.play_opt, self.play_buf)
+
+        self.history['reward'].append(self._episode_reward)
+        self.history['loss'].append(bid_loss + play_loss)
+        self.history['epsilon'].append(self.epsilon)
+        self._episode_reward = 0.0
+
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
         self._episodes_done += 1
         if self._episodes_done % self.target_update_freq == 0:
@@ -337,7 +376,7 @@ class DQNAgentSplit(BaseAgent):
 
     def _train_step(self, net, target_net, opt, buf):
         if len(buf) < self.batch_size:
-            return
+            return 0.0
         obs, actions, rewards, next_obs, dones = buf.sample(self.batch_size)
         with torch.no_grad():
             next_q  = target_net(next_obs).max(1)[0]
@@ -347,6 +386,7 @@ class DQNAgentSplit(BaseAgent):
         opt.zero_grad()
         loss.backward()
         opt.step()
+        return loss.item()
 
     def save(self, path):
         torch.save({'bid_net': self.bid_net.state_dict(),
@@ -397,6 +437,9 @@ class DQNAgentShared(BaseAgent):
         self._play_current        = None
         self._play_pending_reward = None
 
+        self.history = {'reward': [], 'loss': [], 'epsilon': []}
+        self._episode_reward = 0.0
+
     def act(self, obs, valid_actions):
         phase = obs[OBS_PHASE]
         if phase < 0.5:
@@ -440,6 +483,7 @@ class DQNAgentShared(BaseAgent):
         self._play_current = None
 
     def on_round_end(self, reward):
+        self._episode_reward += reward
         if self._bid_pending is not None:
             obs, action = self._bid_pending
             self.bid_buf.push(obs, action, reward, _ZEROS_FULL, True)
@@ -447,7 +491,13 @@ class DQNAgentShared(BaseAgent):
 
     def on_episode_end(self):
         self._push_pending_play(_ZEROS_FULL, done=True)
-        self._train_step()
+        total_loss = self._train_step()
+
+        self.history['reward'].append(self._episode_reward)
+        self.history['loss'].append(total_loss)
+        self.history['epsilon'].append(self.epsilon)
+        self._episode_reward = 0.0
+
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
         self._episodes_done += 1
         if self._episodes_done % self.target_update_freq == 0:
@@ -478,6 +528,8 @@ class DQNAgentShared(BaseAgent):
             self.opt.zero_grad()
             total_loss.backward()
             self.opt.step()
+            return total_loss.item()
+        return 0.0
 
     def save(self, path):
         torch.save({'net': self.net.state_dict(), 'epsilon': self.epsilon}, path)

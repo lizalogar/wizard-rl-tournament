@@ -13,6 +13,7 @@ from agents.agent_qtable import QTableAgent
 from agents.agent_dqn    import DQNAgent, DQNAgentSplit, DQNAgentShared
 from agents.agent_ppo    import PPOAgent
 from agents.random_agent import RandomAgent
+from agents.heuristic_dt_agent import HeuristicDTAgent
 from common.tournament   import run_tournament, grid_search
 
 # ================================================================
@@ -20,8 +21,8 @@ from common.tournament   import run_tournament, grid_search
 # ================================================================
 
 MODELS_DIR      = 'models'
-LOAD_PRETRAINED = False   # True = load saved weights, skip training
-TRAIN_EPISODES  = 3000    # increased from 1000 — QTable needs more with larger dims
+LOAD_PRETRAINED = True   # True = load saved weights, skip training
+TRAIN_EPISODES  = 7000    # increased from 1000 — QTable needs more with larger dims
 EVAL_EPISODES   = 200
 
 os.makedirs(MODELS_DIR, exist_ok=True)
@@ -71,17 +72,17 @@ matchups = [
     ("QTable vs QTable vs QTable",
      [QTableAgent(f'QT_{i}') for i in range(3)]),
 
-    ("DQN baseline vs itself",
-     [DQNAgent(f'DQN_{i}') for i in range(3)]),
+    # ("DQN baseline vs itself",
+    #  [DQNAgent(f'DQN_{i}') for i in range(3)]),
 
-    ("DQN split-input vs itself",
-     [DQNAgentSplit(f'DQNs_{i}') for i in range(3)]),
+    # ("DQN split-input vs itself",
+    #  [DQNAgentSplit(f'DQNs_{i}') for i in range(3)]),
 
-    ("DQN shared-backbone vs itself",
-     [DQNAgentShared(f'DQNh_{i}') for i in range(3)]),
+    # ("DQN shared-backbone vs itself",
+    #  [DQNAgentShared(f'DQNh_{i}') for i in range(3)]),
 
-    ("PPO vs PPO vs PPO",
-     [PPOAgent(f'PPO_{i}') for i in range(3)]),
+    # ("PPO vs PPO vs PPO",
+    #  [PPOAgent(f'PPO_{i}') for i in range(3)]),
 
     # --- Three-way head-to-head ---
     ("QTable vs DQN vs PPO",
@@ -91,11 +92,21 @@ matchups = [
     ("QTable vs 2 random",
      [QTableAgent('QT'), RandomAgent('R1'), RandomAgent('R2')]),
 
-    ("DQN vs 2 random",
-     [DQNAgent('DQN'), RandomAgent('R1'), RandomAgent('R2')]),
+    # ("DQN vs 2 random",
+    #  [DQNAgent('DQN'), RandomAgent('R1'), RandomAgent('R2')]),
 
-    ("PPO vs 2 random",
-     [PPOAgent('PPO'), RandomAgent('R1'), RandomAgent('R2')]),
+    # ("PPO vs 2 random",
+    #  [PPOAgent('PPO'), RandomAgent('R1'), RandomAgent('R2')]),
+
+    #DT HEURISCTIC
+    ("Heuristic vs 2 random",
+     [HeuristicDTAgent('DT_Bot'), RandomAgent('R1'), RandomAgent('R2')]),
+
+    ("Heuristic vs Heuristic vs Heuristic",
+     [HeuristicDTAgent(f'DT_{i}') for i in range(3)]),
+
+    ("Heuristic vs QTable vs DQN",
+     [HeuristicDTAgent('DT_Bot'), QTableAgent('QT'), DQNAgent('DQN')]),
 ]
 
 

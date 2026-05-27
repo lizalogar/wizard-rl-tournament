@@ -1,10 +1,3 @@
-"""
-Heuristic Decision Tree Agent
-
-This agent uses explicit if/else rules extracted directly from a trained
-Q-table agent using decision tree surrogate modeling.
-"""
-
 import random
 import numpy as np
 from common.base_agent import (BaseAgent, OBS_PHASE, OBS_ROUND_NUM, 

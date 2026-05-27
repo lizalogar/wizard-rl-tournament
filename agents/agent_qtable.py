@@ -1,29 +1,3 @@
-"""
-Q-Table Agent  —  YOUR FILE TO IMPLEMENT.
-
-The engine always calls act(obs, valid_actions) and the three on_* hooks.
-Do NOT touch any file in common/.
-
-Quick-start guide
------------------
-obs is a numpy float32 array of length 12. Use the OBS_* constants to
-read individual features, e.g.:
-
-    round_num = round(obs[OBS_ROUND_NUM] * 10)   # integer 1..10
-    phase     = obs[OBS_PHASE]                    # 0.0=bid, 1.0=play
-
-During bidding (phase == 0): valid_actions = [0, 1, ..., round_num]
-During playing (phase == 1): valid_actions = subset of [0,1,2,3,4]
-                              (indices into CARD_TYPES = ['wizard','jester','trump','high','low'])
-
-Your act() must return one integer from valid_actions.
-
-Suggested improvements over the starter code below:
-  - Tune alpha, gamma, epsilon_decay with grid_search() in tournament.py
-  - Extend the bid or play state with more obs features
-  - Try different reward shaping in on_trick_result / on_round_end
-"""
-
 import random
 import pickle
 import numpy as np

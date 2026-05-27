@@ -1,30 +1,3 @@
-"""
-PPO Agent  —  Hybrid: 186-feature exact observation + 5-type action space.
-
-Observation spaces:
-  PLAY_OBS_SIZE = 186  (game state 6 + hand 60 + trick 60 + burned 60)
-  BID_OBS_SIZE  =  66  (game state 6 + hand 60 — trick/burned irrelevant for bidding)
-
-Action space (play phase): 5 card types  [wizard, jester, trump, high, low]
-  The engine maps the chosen type to a concrete card automatically.
-  This keeps the action space simple while the rich obs gives the policy
-  full information about exactly which cards are in hand / on the table.
-
-Tactical priors (play phase only):
-  wizard : always wins — boost when tricks needed, dump otherwise
-  jester : always loses — dump when tricks needed, keep otherwise
-  trump  : strong card — moderate boost when winning, penalty when dumping
-  high   : above average — small boost when winning, small penalty when dumping
-  low    : weak card — penalty when winning, small boost when dumping
-
-Other features:
-  - GAE (lam=0.95) for low-variance advantage estimates
-  - Multi-episode buffer (buffer_episodes=8) for stable batches
-  - Entropy decay tied to train_episodes so it hits the floor at end of training
-  - Separate value networks per phase
-  - k_epochs=8 to fully exploit each collected batch
-"""
-
 import numpy as np
 import torch
 import torch.nn as nn

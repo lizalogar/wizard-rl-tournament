@@ -1,15 +1,3 @@
-"""
-DQN Agent — three architectural variants for comparison.
-
-  DQNAgent        baseline  both networks receive all 12 obs features
-  DQNAgentSplit   option 1  each network receives only its relevant features
-  DQNAgentShared  option 2  shared backbone (12→64→64) with two output heads
-
-Run all three in run_tournament.py to see which architecture learns best.
-Each agent records self.history with per-episode reward, loss, and epsilon
-for use in visualize_training.py.
-"""
-
 import random
 from collections import deque
 import numpy as np

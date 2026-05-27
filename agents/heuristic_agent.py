@@ -1,18 +1,3 @@
-"""
-HeuristicAgent — rule-based Wizard player.
-
-Uses hand-quality estimates and trick-need logic to make decisions.
-Stronger than random but fully deterministic, so a trained PPO can beat it.
-
-Bidding logic:
-  expected_tricks = wizards * 1.0  +  trump_cards * 0.6  +  high_cards * 0.25
-  Bid the rounded expected value, clamped to valid range.
-
-Playing logic:
-  Need more tricks  → prefer wizard > trump > high > low > jester
-  At / over bid     → prefer jester > low > high > trump > wizard
-"""
-
 from common.base_agent import (BaseAgent, OBS_PHASE, OBS_TRICKS_NEEDED,
                                 OBS_HAND_WIZARDS, OBS_HAND_HIGH, OBS_HAND_TRUMP,
                                 OBS_TRICK_WIZARD)

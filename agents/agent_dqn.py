@@ -1,3 +1,15 @@
+"""
+DQN Agent — three architectural variants for comparison.
+
+  DQNAgent        baseline  both networks receive all 17 obs features
+  DQNAgentSplit   option 1  each network receives only its relevant features
+  DQNAgentShared  option 2  shared backbone (17→64→64) with two output heads
+
+Run all three in run_tournament.py to see which architecture learns best.
+Each agent records self.history with per-episode reward, loss, and epsilon
+for use in visualize_training.py.
+"""
+
 import random
 from collections import deque
 import numpy as np
@@ -14,9 +26,10 @@ from common.base_agent import (BaseAgent, OBS_SIZE,
 # Only the features that are actually meaningful for each decision.
 
 # those numbers are the indices of the features in the full obs vector that are relevant for each network
-BID_FEATURES  = [0, 6, 7, 8]              # round, wizards, high, trump in hand
-PLAY_FEATURES = [2, 3, 4, 5, 9, 10, 11]  # bid, tricks_won, needed, position,
-                                           # have_wizard / have_jester / have_trump
+BID_FEATURES  = [0, 6, 7, 8, 14]              # round, wizards, high, trump in hand, max trump rank
+PLAY_FEATURES = [2, 3, 4, 5, 9, 10, 11,       # bid, tricks_won, needed, position,
+                 12, 13, 14, 15, 16]           # have_wizard/jester/trump + trick_wizard, trick_trump,
+                                               # max_trump_rank, opp_max_need, opp_min_need
 
 _ZEROS_FULL = np.zeros(OBS_SIZE,            dtype=np.float32)  # terminal s' for full obs
 _ZEROS_BID  = np.zeros(len(BID_FEATURES),  dtype=np.float32)  # terminal s' for bid subset
@@ -26,8 +39,8 @@ _ZEROS_PLAY = np.zeros(len(PLAY_FEATURES), dtype=np.float32)  # terminal s' for 
 # ------------------------------------------------------------------
 # Neural networks
 # ------------------------------------------------------------------
-# Bid network:  12 inputs → 11 outputs (one Q-value per possible bid 0–10)
-# Play network: 12 inputs → 5 outputs  (one Q-value per card type)
+# Bid network:  17 inputs → 21 outputs (one Q-value per possible bid 0–20)
+# Play network: 17 inputs → 5 outputs  (one Q-value per card type)
 
 class QNetwork(nn.Module):
     """Standard two-hidden-layer network; outputs one Q-value per action."""
@@ -47,7 +60,7 @@ class SharedQNetwork(nn.Module):
     """
     Shared backbone with two output heads.
 
-    obs (12) → backbone (12 → 64 → 64) ─┬→ bid_head  (64 → MAX_BID)
+    obs (17) → backbone (17 → 64 → 64) ─┬→ bid_head  (64 → MAX_BID)
                                           └→ play_head (64 → NUM_CARD_TYPES)
 
     Both heads share the same hidden representation, so knowledge about
@@ -133,6 +146,7 @@ class DQNAgent(BaseAgent):
         self.target_update_freq = target_update_freq
         self._episodes_done     = 0
 
+        # OBS_SIZE is the num of features (17), MAX_BID is the max number of bids (21)
         self.bid_net    = QNetwork(OBS_SIZE, MAX_BID, hidden_size)
         self.bid_target = QNetwork(OBS_SIZE, MAX_BID, hidden_size)
         self.bid_target.load_state_dict(self.bid_net.state_dict())
@@ -156,7 +170,8 @@ class DQNAgent(BaseAgent):
 
     def act(self, obs, valid_actions):
         phase = obs[OBS_PHASE]
-        if phase < 0.5:
+        # 0 is bidding phase, 1 is playing phase. 
+        if phase < 0.5: # we are in bidding phase
             self._push_pending_play(_ZEROS_FULL, done=True)
             if random.random() < self.epsilon:
                 action = random.choice(valid_actions)
@@ -169,7 +184,7 @@ class DQNAgent(BaseAgent):
                 action = int(q.argmax())
             self._bid_pending  = (obs.copy(), action)
             self._play_current = None
-        else:
+        else: #we are in playing phase
             self._push_pending_play(obs, done=False)
             if random.random() < self.epsilon:
                 action = random.choice(valid_actions)
@@ -219,13 +234,18 @@ class DQNAgent(BaseAgent):
             self.bid_target.load_state_dict(self.bid_net.state_dict())
             self.play_target.load_state_dict(self.play_net.state_dict())
 
+
+    # Every time you update net's weights, the targets change too — because 
+    # net computes both the prediction AND the target. You're chasing a 
+    # moving goalpost. The network never settles because every update shifts 
+    # what it's trying to hit.
     def _train_step(self, net, target_net, opt, buf):
         if len(buf) < self.batch_size:
             return 0.0
         obs, actions, rewards, next_obs, dones = buf.sample(self.batch_size)
         with torch.no_grad():
             next_q  = target_net(next_obs).max(1)[0]
-            targets = rewards + self.gamma * next_q * (1.0 - dones)
+            targets = rewards + self.gamma * next_q * (1.0 - dones) #Q-values calculated and network trained on that
         q_pred = net(obs).gather(1, actions.unsqueeze(1)).squeeze(1)
         loss   = nn.MSELoss()(q_pred, targets)
         opt.zero_grad()
@@ -238,6 +258,7 @@ class DQNAgent(BaseAgent):
                     'play_net': self.play_net.state_dict(),
                     'epsilon': self.epsilon}, path)
 
+    #Loads a previously saved agent from disk back into memory.
     def load(self, path):
         data = torch.load(path, weights_only=True)
         self.bid_net.load_state_dict(data['bid_net'])
@@ -433,7 +454,7 @@ class DQNAgentShared(BaseAgent):
         if phase < 0.5:
             self._push_pending_play(_ZEROS_FULL, done=True)
             if random.random() < self.epsilon:
-                action = random.choice(valid_actions)
+                action = random.choice(valid_actions) # random exploration
             else:
                 with torch.no_grad():
                     q = self.net.forward_bid(torch.FloatTensor(obs)).numpy()
@@ -446,7 +467,7 @@ class DQNAgentShared(BaseAgent):
         else:
             self._push_pending_play(obs, done=False)
             if random.random() < self.epsilon:
-                action = random.choice(valid_actions)
+                action = random.choice(valid_actions) # random exploration
             else:
                 with torch.no_grad():
                     q = self.net.forward_play(torch.FloatTensor(obs)).numpy()

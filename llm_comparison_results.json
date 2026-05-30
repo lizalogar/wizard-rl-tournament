@@ -1,0 +1,59 @@
+{
+  "experiment": "LLM (Claude) vs RL Comparison \u2014 Wizard card game",
+  "eval_episodes": 1000,
+  "train_episodes": 5000,
+  "num_players": 7,
+  "rankings": [
+    {
+      "rank": 1,
+      "agent": "Claude",
+      "avg_score": 71.63,
+      "type": "[LLM - this agent]"
+    },
+    {
+      "rank": 2,
+      "agent": "DQN",
+      "avg_score": 67.3,
+      "type": "[DQN, 5000 ep]"
+    },
+    {
+      "rank": 3,
+      "agent": "H",
+      "avg_score": 59.83,
+      "type": "[hand-coded heuristic]"
+    },
+    {
+      "rank": 4,
+      "agent": "QT",
+      "avg_score": 49.51,
+      "type": "[Q-table, 5000 ep]"
+    },
+    {
+      "rank": 5,
+      "agent": "PPO",
+      "avg_score": 23.76,
+      "type": "[PPO, 5000 ep]"
+    },
+    {
+      "rank": 6,
+      "agent": "DT",
+      "avg_score": -31.05,
+      "type": "[decision-tree heuristic]"
+    },
+    {
+      "rank": 7,
+      "agent": "Random",
+      "avg_score": -32.63,
+      "type": "[random baseline]"
+    }
+  ],
+  "raw_scores": {
+    "QT": 49.51,
+    "DQN": 67.3,
+    "PPO": 23.76,
+    "Random": -32.63,
+    "H": 59.83,
+    "DT": -31.05,
+    "Claude": 71.63
+  }
+}
